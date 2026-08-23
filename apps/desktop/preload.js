@@ -6,5 +6,7 @@ contextBridge.exposeInMainWorld('clearweb', {
   forward: () => ipcRenderer.invoke('browser:forward'),
   reload: () => ipcRenderer.invoke('browser:reload'),
   home: () => ipcRenderer.invoke('browser:home'),
-  onState: (callback) => ipcRenderer.on('browser:state', (_, state) => callback(state))
+  getProtection: () => ipcRenderer.invoke('protection:get'),
+  onState: (callback) => ipcRenderer.on('browser:state', (_, state) => callback(state)),
+  onProtection: (callback) => ipcRenderer.on('protection:state', (_, state) => callback(state))
 });
