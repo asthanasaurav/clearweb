@@ -1,0 +1,26 @@
+name: macOS Build
+on:
+  push:
+    branches: [main, feat/mvp-browser]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm install
+      - name: Syntax checks
+        run: |
+          node --check apps/desktop/main.js
+          node --check apps/desktop/preload.js
+          node --check apps/desktop/ui/renderer.js
+          node --check packages/ai/classifier.js
+          node --check packages/privacy/url-hygiene.js
+      - name: Verify Electron installation
+        run: npx electron --version
