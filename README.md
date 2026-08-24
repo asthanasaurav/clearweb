@@ -73,11 +73,48 @@ clearweb/
 5. Clearweb should explain what it blocks instead of behaving like a black box.
 6. Performance and compatibility are product features.
 
-## Status
+## macOS MVP
 
-🚧 Early development / architecture phase.
+The feature branch contains a runnable Electron-only macOS MVP with:
 
-The immediate goal is a runnable macOS desktop MVP demonstrating browser navigation, network filtering, Clean Web Mode, and a protection summary.
+- Multi-tab navigation, omnibox, bookmarks, history, downloads and restorable sessions
+- A persistent Chromium profile for cookies, storage and provider-permitted logins
+- Ghostery's EasyList/EasyPrivacy-compatible network blocker and URL tracking-parameter stripping
+- Default-on Clean Web rules with protected interactive controls and fail-open behavior
+- Protection counters and an in-browser privacy dashboard
+- Five-minute inactive-tab destruction with transparent restore from saved URL/title state
+- A default-on local AI sidebar backed by a provider abstraction; Qwen through Ollama is the default provider
+- Sandboxed, context-isolated web content and a narrow IPC bridge for trusted browser chrome
+
+### Run
+
+Requires Node.js 22+ and pnpm.
+
+```sh
+pnpm install
+pnpm start
+```
+
+Local AI is optional at runtime. Install Ollama and pull `qwen2.5:3b` to enable assistant responses. If Ollama is missing or times out, browsing and deterministic protection continue normally.
+
+### Verify and package
+
+```sh
+pnpm run check
+pnpm test
+CSC_IDENTITY_AUTO_DISCOVERY=false pnpm run build:mac
+```
+
+Unsigned arm64 DMG/ZIP artifacts are produced in `dist/`. Public distribution still requires a Clearweb icon, Apple Developer ID signing, notarization and release-channel update infrastructure.
+
+### Known MVP limitations
+
+- Chrome Web Store extensions are not supported.
+- Google and other providers may restrict authentication in embedded Chromium/Electron clients.
+- Protection counters are per app run; browsing library and sessions persist.
+- Clean Web currently uses conservative deterministic DOM rules, not an always-on AI classifier.
+- Qwen is not bundled, so the user must run Ollama and install the model locally.
+- Builds are macOS arm64 and unsigned; Fedora and Windows are intentionally out of scope.
 
 ## License
 

@@ -16,4 +16,12 @@ function sanitizeUrl(raw) {
   }
 }
 
-module.exports = { sanitizeUrl };
+function normalizeInput(input) {
+  const value = String(input || '').trim();
+  if (!value) return 'clearweb://newtab';
+  if (/^https?:\/\//i.test(value)) return value;
+  if (/^[\w.-]+\.[a-z]{2,}([/:?#].*)?$/i.test(value)) return `https://${value}`;
+  return `https://www.google.com/search?q=${encodeURIComponent(value)}`;
+}
+
+module.exports = { sanitizeUrl, normalizeInput };
