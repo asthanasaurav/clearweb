@@ -9,8 +9,10 @@ const { OllamaProvider } = require('../../packages/ai/providers/ollama');
 const PROFILE = 'persist:clearweb-default';
 const HOME = 'clearweb://newtab';
 const CHROME_HEIGHT = 112;
-const SUSPEND_AFTER_MS = Number(process.env.CLEARWEB_SUSPEND_MS || 5 * 60_000);
-let win, ses, blocker, saveTimer, suspensionTimer;
+const SUSPEND_AFTER_MS = Number(process.env.CLEARWEB_SUSPEND_MS || 60_000);
+const PANEL_WIDTH = 414;
+let win, ses, blocker, saveTimer, suspensionTimer, protectionEmitTimer;
+let panelOpen = false;
 let tabs = [], activeId = null, downloads = [], history = [], bookmarks = [], savedSessions = [];
 let settings = { aiEnabled: true, cleanWeb: true };
 const protection = { blocked: 0, trackingParamsRemoved: 0 };
@@ -30,17 +32,22 @@ const activeWebContents = () => {
   const webContents = activeTab()?.view?.webContents;
   return webContents && !webContents.isDestroyed() ? webContents : null;
 };
+const activeIsBookmarked = () => Boolean(activeTab()?.url && bookmarks.some((bookmark) => bookmark.url === activeTab().url));
 const emitState = () => {
   const webContents = activeWebContents();
-  send('app:state', { tabs: tabs.map(publicTab), activeId, settings, protection, canGoBack: webContents?.navigationHistory.canGoBack() || false, canGoForward: webContents?.navigationHistory.canGoForward() || false, provider: ai.info() });
+  send('app:state', { tabs: tabs.map(publicTab), activeId, settings, protection, bookmarked: activeIsBookmarked(), canGoBack: webContents?.navigationHistory.canGoBack() || false, canGoForward: webContents?.navigationHistory.canGoForward() || false, provider: ai.info() });
+};
+const scheduleProtectionEmit = () => {
+  if (protectionEmitTimer) return;
+  protectionEmitTimer = setTimeout(() => { protectionEmitTimer = null; emitState(); }, 500);
 };
 const cleanTarget = (input) => { const clean = sanitizeUrl(normalizeInput(input)); protection.trackingParamsRemoved += clean.removed; return clean.url; };
 
 async function installBlocking() {
-  try { blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch); blocker.enableBlockingInSession(ses); blocker.on('request-blocked', () => { protection.blocked += 1; emitState(); }); }
+  try { blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch); blocker.enableBlockingInSession(ses); blocker.on('request-blocked', () => { protection.blocked += 1; scheduleProtectionEmit(); }); }
   catch (error) { console.error('[Clearweb] blocker unavailable; continuing unblocked:', error); }
 }
-function boundsForView() { const [width, height] = win.getContentSize(); return { x: 0, y: CHROME_HEIGHT, width, height: Math.max(0, height - CHROME_HEIGHT) }; }
+function boundsForView() { const [width, height] = win.getContentSize(); return { x: 0, y: CHROME_HEIGHT, width: Math.max(0, width - (panelOpen ? PANEL_WIDTH : 0)), height: Math.max(0, height - CHROME_HEIGHT) }; }
 function layout() { const tab = activeTab(); if (tab?.view) tab.view.setBounds(boundsForView()); }
 function newView(tab) {
   const view = new BrowserView({ webPreferences: { partition: PROFILE, contextIsolation: true, nodeIntegration: false, sandbox: true, safeDialogs: true } }); tab.view = view; view.setAutoResize({ width: true, height: true });
@@ -66,7 +73,8 @@ function applyCleanWeb(tab = activeTab()) { if (!tab?.view || tab.view.webConten
 
 async function createBrowser() {
   const restored = safeReadState(); settings = { ...settings, ...(restored.settings || {}) }; bookmarks = restored.bookmarks || []; history = restored.history || []; downloads = restored.downloads || []; savedSessions = restored.savedSessions || [];
-  ses = session.fromPartition(PROFILE, { cache: true }); await installBlocking();
+  ses = session.fromPartition(PROFILE, { cache: true });
+  installBlocking();
   ses.on('will-download', (_, item) => { const entry = { id: crypto.randomUUID(), filename: item.getFilename(), url: item.getURL(), path: '', state: 'progressing', received: 0, total: item.getTotalBytes(), startedAt: Date.now() }; downloads.unshift(entry); send('downloads:changed', downloads); schedulePersist(); item.on('updated', (_event, state) => { entry.state = state; entry.received = item.getReceivedBytes(); send('downloads:changed', downloads); }); item.once('done', (_event, state) => { entry.state = state; entry.path = item.getSavePath(); entry.received = item.getReceivedBytes(); send('downloads:changed', downloads); schedulePersist(); }); });
   win = new BrowserWindow({ width: 1440, height: 920, minWidth: 940, minHeight: 640, backgroundColor: '#090d15', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 18 }, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   await win.loadFile(path.join(__dirname, 'ui', 'index.html')); win.on('resize', layout); win.on('close', persist);
@@ -75,7 +83,7 @@ async function createBrowser() {
   suspensionTimer = setInterval(suspendInactive, 30_000); emitState();
 }
 
-ipcMain.handle('app:get-state', () => ({ tabs: tabs.map(publicTab), activeId, settings, protection, provider: ai.info() }));
+ipcMain.handle('app:get-state', () => ({ tabs: tabs.map(publicTab), activeId, settings, protection, bookmarked: activeIsBookmarked(), provider: ai.info() }));
 ipcMain.handle('tab:new', (_, url) => createTab(url || HOME)); ipcMain.handle('tab:activate', (_, id) => activateTab(id)); ipcMain.handle('tab:close', (_, id) => closeTab(id));
 ipcMain.handle('browser:navigate', async (_, input) => { const tab = activeTab(); if (!tab) return; const url = cleanTarget(input); if (!tab.view) newView(tab); win.setBrowserView(tab.view); layout(); await loadTab(tab, url); emitState(); });
 ipcMain.handle('browser:back', () => { const webContents = activeWebContents(); if (webContents?.navigationHistory.canGoBack()) webContents.navigationHistory.goBack(); });
@@ -83,8 +91,9 @@ ipcMain.handle('browser:forward', () => { const webContents = activeWebContents(
 ipcMain.handle('browser:reload', () => activeWebContents()?.reload());
 ipcMain.handle('browser:home', () => showNewTab(activeTab()));
 ipcMain.handle('settings:set', (_, patch) => { settings = { ...settings, ...patch }; applyCleanWeb(); emitState(); schedulePersist(); return settings; });
+ipcMain.handle('panel:set-open', (_, open) => { panelOpen = Boolean(open); layout(); });
 ipcMain.handle('library:get', () => ({ history, bookmarks, downloads, savedSessions })); ipcMain.handle('history:clear', () => { history = []; schedulePersist(); return history; });
-ipcMain.handle('bookmark:toggle', () => { const tab = activeTab(); if (!tab || tab.url === HOME) return bookmarks; const index = bookmarks.findIndex((b) => b.url === tab.url); if (index >= 0) bookmarks.splice(index, 1); else bookmarks.unshift({ id: crypto.randomUUID(), url: tab.url, title: tab.title, createdAt: Date.now() }); schedulePersist(); return bookmarks; });
+ipcMain.handle('bookmark:toggle', () => { const tab = activeTab(); if (!tab || tab.url === HOME) return bookmarks; const index = bookmarks.findIndex((b) => b.url === tab.url); if (index >= 0) bookmarks.splice(index, 1); else bookmarks.unshift({ id: crypto.randomUUID(), url: tab.url, title: tab.title, createdAt: Date.now() }); emitState(); schedulePersist(); return bookmarks; });
 ipcMain.handle('session:save', (_, name) => { savedSessions.unshift({ id: crypto.randomUUID(), name: name || `Session ${savedSessions.length + 1}`, createdAt: Date.now(), tabs: tabs.map(({ url, title }) => ({ url, title })) }); schedulePersist(); return savedSessions; });
 ipcMain.handle('session:restore', async (_, id) => { const snapshot = savedSessions.find(s => s.id === id); if (!snapshot) return; const added = []; for (const item of snapshot.tabs) added.push(await createTab(item.url, false)); if (added.length) await activateTab(added[0].id); }); ipcMain.handle('download:open', (_, filePath) => filePath && shell.openPath(filePath));
 ipcMain.handle('ai:ask', async (_, { prompt, pageText }) => { if (!settings.aiEnabled) return { ok: false, error: 'AI Assistant is disabled.' }; try { return { ok: true, text: await ai.ask({ prompt, context: String(pageText || '').slice(0, 18_000) }) }; } catch (error) { return { ok: false, error: error.message, hint: 'Start Ollama and install the configured Qwen model. Browsing remains fully functional.' }; } });
