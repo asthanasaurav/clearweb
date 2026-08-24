@@ -37,13 +37,12 @@ function buildCleanWebScript(enabled) {
     };
     const safeContainer = (element) => {
       let candidate = element;
-      for (let depth = 0; depth < 4 && candidate?.parentElement; depth += 1) {
+      for (let depth = 0; depth < 3 && candidate?.parentElement; depth += 1) {
         const parent = candidate.parentElement;
         if (isProtected(parent) || /^(BODY|HTML|MAIN|ARTICLE|SECTION)$/.test(parent.tagName)) break;
-        const text = (parent.innerText || parent.textContent || '').trim();
         const interactive = parent.querySelector('input,textarea,select,button,[contenteditable="true"],a[href]');
-        const rect = parent.getBoundingClientRect();
-        if (!interactive && text.length < 240 && rect.height < 700) candidate = parent;
+        const structural = parent.children.length <= 4 && parent.textContent.length < 240;
+        if (!interactive && structural) candidate = parent;
         else break;
       }
       return candidate;
@@ -55,24 +54,36 @@ function buildCleanWebScript(enabled) {
       target.remove();
       return true;
     };
+    const ownText = (element) => Array.from(element.childNodes).filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join(' ').trim();
     const sweep = (root = document) => {
       let removed = 0;
-      root.querySelectorAll(removableSelector).forEach((element) => { removed += remove(element) ? 1 : 0; });
-      root.querySelectorAll('iframe,img,script').forEach((element) => { if (adUrl(element)) removed += remove(element) ? 1 : 0; });
-      root.querySelectorAll('div,aside,section,span,p').forEach((element) => {
-        const text = (element.innerText || element.textContent || '').trim();
-        if (text.length <= 40 && adLabel.test(text)) removed += remove(element) ? 1 : 0;
+      const roots = root.matches ? [root] : [];
+      const select = (selector) => roots.filter((item) => item.matches(selector)).concat(Array.from(root.querySelectorAll?.(selector) || []));
+      select(removableSelector).forEach((element) => { removed += remove(element) ? 1 : 0; });
+      select('iframe,img,script').forEach((element) => { if (adUrl(element)) removed += remove(element) ? 1 : 0; });
+      select('div,aside,span,p').forEach((element) => {
+        const text = ownText(element);
+        if (text && text.length <= 40 && adLabel.test(text)) removed += remove(element) ? 1 : 0;
       });
-      root.querySelectorAll('video[autoplay]').forEach((video) => { try { video.pause(); video.removeAttribute('autoplay'); } catch {} });
+      select('video[autoplay]').forEach((video) => { try { video.pause(); video.removeAttribute('autoplay'); } catch {} });
       return removed;
     };
 
     let removed = sweep();
     window[OBSERVER_KEY]?.disconnect();
-    let timer;
-    window[OBSERVER_KEY] = new MutationObserver(() => {
-      clearTimeout(timer);
-      timer = setTimeout(() => { removed += sweep(); }, 200);
+    const pending = new Set(); let scheduled = false;
+    const flush = (deadline) => {
+      scheduled = false;
+      for (const node of pending) {
+        pending.delete(node); if (node.isConnected) removed += sweep(node);
+        if (deadline?.timeRemaining && deadline.timeRemaining() < 2) break;
+      }
+      if (pending.size) schedule();
+    };
+    const schedule = () => { if (scheduled) return; scheduled = true; (window.requestIdleCallback || ((fn) => setTimeout(fn, 80)))(flush, { timeout: 500 }); };
+    window[OBSERVER_KEY] = new MutationObserver((records) => {
+      records.forEach((record) => record.addedNodes.forEach((node) => { if (node.nodeType === Node.ELEMENT_NODE) pending.add(node); }));
+      schedule();
     });
     window[OBSERVER_KEY].observe(document.documentElement, { childList: true, subtree: true });
     return { removed };

@@ -18,4 +18,8 @@ test('injected cleaner observes dynamic slots and protects controls', () => {
   assert.match(script, /MutationObserver/);
   assert.match(script, /form,nav/);
   assert.match(script, /target\.remove\(\)/);
+  assert.match(script, /addedNodes/);
+  assert.match(script, /requestIdleCallback/);
+  assert.doesNotMatch(script, /innerText/);
+  assert.doesNotMatch(script, /getBoundingClientRect/);
 });

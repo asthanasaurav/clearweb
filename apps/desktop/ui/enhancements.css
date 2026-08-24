@@ -1,0 +1,9 @@
+.brand { margin-bottom: 8px; }
+.brand-copy { display: flex; flex-direction: column; line-height: 1.05; }
+.brand-copy small { color: var(--muted); font-size: 9px; font-weight: 500; margin-top: 3px; }
+.stat.expandable { appearance: none; color: inherit; text-align: left; cursor: pointer; }
+.stat.expandable:hover { border-color: #4a6585; }
+.blocked-list { margin: 10px 0 2px; max-height: 220px; overflow: auto; }
+.blocked-row { padding: 9px 2px; border-bottom: 1px solid #253142; }
+.blocked-row b, .blocked-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.blocked-row small { color: var(--muted); font-size: 10px; }
