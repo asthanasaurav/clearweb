@@ -3,6 +3,10 @@ dist/
 build/
 out/
 coverage/
+engine/.cache/
+engine/chromium/
+engine/depot_tools/
+engine/out/
 .DS_Store
 .env
 .env.*

@@ -60,8 +60,17 @@ Browser runtime, tabs, navigation, web contents integration, menus, settings and
 - Isolate page content from browser-level capabilities.
 - Do not weaken Chromium sandboxing to implement convenience features.
 
-## MVP technology decision
+## Engine decision
 
-Start with a Chromium-based desktop shell rather than a Chromium source fork. This lets the project validate filtering, Clean Web UX and product-market assumptions without inheriting Chromium's full build and patch-maintenance burden.
+The 0.2.x MVP used Electron to validate filtering and Clean Web UX. Clearweb
+1.0.0 replaces Electron with a pinned Chromium browser distribution because
+strict sites can identify and reject embedded runtimes independently of their
+HTTP user-agent.
+
+Clearweb follows upstream Chromium closely and carries the smallest practical
+patch layer. Engine changes must preserve Chromium's process isolation and
+sandbox. Compatibility work may not disable security controls or impersonate
+another installed browser. The Electron application remains a legacy fallback
+only until all native migration gates pass.
 
 The runtime choice should be revisited if required interception APIs, extension compatibility, anti-fingerprinting, or browser-engine integration cannot meet Clearweb's product requirements.

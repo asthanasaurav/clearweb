@@ -20,7 +20,10 @@ Most browsers render whatever a publisher sends and leave users to install exten
 
 ## Architecture direction
 
-The first milestone deliberately avoids maintaining a full Chromium fork. The MVP will use a Chromium-based desktop shell with Clearweb-owned filtering and page-cleaning components. A deeper Chromium fork can be evaluated only if browser-engine-level integration becomes necessary.
+Clearweb 1.0.0 is migrating from the Electron MVP to a pinned, native Chromium
+browser distribution. The project maintains a small Clearweb patch layer and
+rebases it onto upstream Chromium security releases instead of allowing a broad,
+long-lived engine fork. See `engine/README.md` and `engine/MIGRATION.md`.
 
 ```text
 clearweb/
@@ -73,7 +76,17 @@ clearweb/
 5. Clearweb should explain what it blocks instead of behaving like a black box.
 6. Performance and compatibility are product features.
 
-## macOS MVP
+## Clearweb 1.0.0
+
+Version 1.0.0 is under active development on the native Chromium migration
+branch. Its engine revision, platform and mandatory sandbox policy are pinned in
+`engine/version.json`. Electron is not part of the 1.0.0 runtime.
+
+The existing Electron application remains version 0.2.1 until every migration
+gate passes. Keeping it available during development prevents an incomplete
+native build from replacing the last known-good browser.
+
+## macOS MVP (legacy fallback)
 
 Current version: **0.2.1**
 

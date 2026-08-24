@@ -1,0 +1,8 @@
+{
+  "clearwebVersion": "1.0.0",
+  "chromiumMilestone": 150,
+  "chromiumRevision": "8f7d6f92139ccc11312b5dc2472b22c3ca1bc5c8",
+  "chromiumRef": "refs/branch-heads/7339",
+  "platform": "macos-arm64",
+  "sandboxRequired": true
+}
