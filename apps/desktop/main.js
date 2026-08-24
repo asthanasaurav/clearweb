@@ -26,7 +26,14 @@ const schedulePersist = () => { clearTimeout(saveTimer); saveTimer = setTimeout(
 const publicTab = (tab) => ({ id: tab.id, url: tab.url, title: tab.title, favicon: tab.favicon, suspended: !tab.view, active: tab.id === activeId });
 const send = (channel, value) => { if (win && !win.isDestroyed()) win.webContents.send(channel, value); };
 const activeTab = () => tabs.find((tab) => tab.id === activeId);
-const emitState = () => send('app:state', { tabs: tabs.map(publicTab), activeId, settings, protection, canGoBack: activeTab()?.view?.webContents.canGoBack() || false, canGoForward: activeTab()?.view?.webContents.canGoForward() || false, provider: ai.info() });
+const activeWebContents = () => {
+  const webContents = activeTab()?.view?.webContents;
+  return webContents && !webContents.isDestroyed() ? webContents : null;
+};
+const emitState = () => {
+  const webContents = activeWebContents();
+  send('app:state', { tabs: tabs.map(publicTab), activeId, settings, protection, canGoBack: webContents?.navigationHistory.canGoBack() || false, canGoForward: webContents?.navigationHistory.canGoForward() || false, provider: ai.info() });
+};
 const cleanTarget = (input) => { const clean = sanitizeUrl(normalizeInput(input)); protection.trackingParamsRemoved += clean.removed; return clean.url; };
 
 async function installBlocking() {
@@ -71,7 +78,10 @@ async function createBrowser() {
 ipcMain.handle('app:get-state', () => ({ tabs: tabs.map(publicTab), activeId, settings, protection, provider: ai.info() }));
 ipcMain.handle('tab:new', (_, url) => createTab(url || HOME)); ipcMain.handle('tab:activate', (_, id) => activateTab(id)); ipcMain.handle('tab:close', (_, id) => closeTab(id));
 ipcMain.handle('browser:navigate', async (_, input) => { const tab = activeTab(); if (!tab) return; const url = cleanTarget(input); if (!tab.view) newView(tab); win.setBrowserView(tab.view); layout(); await loadTab(tab, url); emitState(); });
-ipcMain.handle('browser:back', () => activeTab()?.view?.webContents.canGoBack() && activeTab().view.webContents.goBack()); ipcMain.handle('browser:forward', () => activeTab()?.view?.webContents.canGoForward() && activeTab().view.webContents.goForward()); ipcMain.handle('browser:reload', () => activeTab()?.view?.webContents.reload()); ipcMain.handle('browser:home', () => showNewTab(activeTab()));
+ipcMain.handle('browser:back', () => { const webContents = activeWebContents(); if (webContents?.navigationHistory.canGoBack()) webContents.navigationHistory.goBack(); });
+ipcMain.handle('browser:forward', () => { const webContents = activeWebContents(); if (webContents?.navigationHistory.canGoForward()) webContents.navigationHistory.goForward(); });
+ipcMain.handle('browser:reload', () => activeWebContents()?.reload());
+ipcMain.handle('browser:home', () => showNewTab(activeTab()));
 ipcMain.handle('settings:set', (_, patch) => { settings = { ...settings, ...patch }; applyCleanWeb(); emitState(); schedulePersist(); return settings; });
 ipcMain.handle('library:get', () => ({ history, bookmarks, downloads, savedSessions })); ipcMain.handle('history:clear', () => { history = []; schedulePersist(); return history; });
 ipcMain.handle('bookmark:toggle', () => { const tab = activeTab(); if (!tab || tab.url === HOME) return bookmarks; const index = bookmarks.findIndex((b) => b.url === tab.url); if (index >= 0) bookmarks.splice(index, 1); else bookmarks.unshift({ id: crypto.randomUUID(), url: tab.url, title: tab.title, createdAt: Date.now() }); schedulePersist(); return bookmarks; });
