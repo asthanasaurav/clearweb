@@ -75,6 +75,10 @@ clearweb/
 
 ## macOS MVP
 
+Current version: **0.1.3**
+
+Versioning follows `X.Y.Z`: bug fixes increment `Z`, minor features increment `Y`, and `X` changes only when explicitly directed by the project owner.
+
 The feature branch contains a runnable Electron-only macOS MVP with:
 
 - Multi-tab navigation, omnibox, bookmarks, history, downloads and restorable sessions
