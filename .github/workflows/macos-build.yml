@@ -10,11 +10,12 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Syntax checks
         run: |
           node --check apps/desktop/main.js
@@ -23,4 +24,4 @@ jobs:
           node --check packages/ai/classifier.js
           node --check packages/privacy/url-hygiene.js
       - name: Verify Electron installation
-        run: npx electron --version
+        run: pnpm exec electron --version
