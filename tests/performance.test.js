@@ -29,5 +29,20 @@ test('exposes blocked-request details and explicit AI page cleanup', () => {
   assert.match(main, /page:clean-ai/);
   assert.match(preload, /cleanWithAI/);
   assert.match(html, /id="ai-clean"/);
-  assert.match(html, /v0\.2\.0/);
+  assert.match(html, /v0\.2\.1/);
+});
+
+test('uses a Chrome-compatible identity for strict sites', () => {
+  const main = read('apps/desktop/main.js');
+  assert.match(main, /COMPAT_USER_AGENT/);
+  assert.match(main, /setUserAgent/);
+  assert.match(main, /magicbricks\.com/);
+  assert.match(main, /Sec-CH-UA/);
+});
+
+test('installs blocking once across macOS window relaunches', () => {
+  const main = read('apps/desktop/main.js');
+  assert.match(main, /if \(blockingInstalled\) return/);
+  assert.match(main, /blockingInstalled = true/);
+  assert.match(main, /site:compatibility/);
 });

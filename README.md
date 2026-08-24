@@ -75,7 +75,7 @@ clearweb/
 
 ## macOS MVP
 
-Current version: **0.2.0**
+Current version: **0.2.1**
 
 Versioning follows `X.Y.Z`: bug fixes increment `Z`, minor features increment `Y`, and `X` changes only when explicitly directed by the project owner.
 

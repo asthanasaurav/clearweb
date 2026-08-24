@@ -9,12 +9,17 @@ const { buildCleanWebScript } = require('../../packages/clean-web/inject');
 const { getWeatherContext } = require('../../packages/ai/tools/weather');
 
 const PROFILE = 'persist:clearweb-default';
+const CHROME_VERSION = process.env.CLEARWEB_COMPAT_CHROME_VERSION || '151.0.0.0';
+const CHROME_MAJOR = CHROME_VERSION.split('.')[0];
+const COMPAT_USER_AGENT = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VERSION} Safari/537.36`;
+app.userAgentFallback = COMPAT_USER_AGENT;
 const HOME = 'clearweb://newtab';
 const CHROME_HEIGHT = 112;
 const SUSPEND_AFTER_MS = Number(process.env.CLEARWEB_SUSPEND_MS || 15 * 60_000);
 const MAX_LIVE_TABS = Number(process.env.CLEARWEB_MAX_LIVE_TABS || 8);
 const PANEL_WIDTH = 414;
 let win, ses, blocker, saveTimer, suspensionTimer, protectionEmitTimer, lastStateJson;
+let blockingInstalled = false, compatibilityInstalled = false;
 let panelOpen = false;
 let tabs = [], activeId = null, downloads = [], history = [], bookmarks = [], savedSessions = [];
 let settings = { aiEnabled: true, cleanWeb: true };
@@ -53,8 +58,19 @@ const scheduleProtectionEmit = () => {
 const cleanTarget = (input) => { const clean = sanitizeUrl(normalizeInput(input)); protection.trackingParamsRemoved += clean.removed; return clean.url; };
 
 async function installBlocking() {
-  try { blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch); blocker.enableBlockingInSession(ses); blocker.on('request-blocked', (request) => { protection.blocked += 1; blockedRequests.unshift({ url: request?.url || '', host: request?.hostname || '', source: request?.sourceHostname || '', type: request?.type || 'other', blockedAt: Date.now() }); if (blockedRequests.length > 500) blockedRequests.length = 500; scheduleProtectionEmit(); }); }
-  catch (error) { console.error('[Clearweb] blocker unavailable; continuing unblocked:', error); }
+  if (blockingInstalled) return;
+  blockingInstalled = true;
+  try { blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch); blocker.updateFromDiff({ added: ['||youtube.com/api/stats/ads$xhr', '||youtube.com/pagead/$xhr', '||youtube.com/ptracking$xhr', '||google.com/pagead/$xhr', '||doubleclick.net^', '||googlesyndication.com^'] }); blocker.enableBlockingInSession(ses); blocker.on('request-blocked', (request) => { protection.blocked += 1; blockedRequests.unshift({ url: request?.url || '', host: request?.hostname || '', source: request?.sourceHostname || '', type: request?.type || 'other', blockedAt: Date.now() }); if (blockedRequests.length > 500) blockedRequests.length = 500; scheduleProtectionEmit(); }); }
+  catch (error) { blockingInstalled = false; console.error('[Clearweb] blocker unavailable; continuing unblocked:', error); }
+}
+function installSiteCompatibility() {
+  if (compatibilityInstalled) return;
+  ses.setUserAgent(COMPAT_USER_AGENT, 'en-US,en;q=0.9');
+  ses.webRequest.onBeforeSendHeaders({ urls: ['*://*.magicbricks.com/*', '*://magicbricks.com/*'] }, (details, callback) => {
+    const headers = { ...details.requestHeaders, 'User-Agent': COMPAT_USER_AGENT, 'Sec-CH-UA': `"Chromium";v="${CHROME_MAJOR}", "Google Chrome";v="${CHROME_MAJOR}", "Not=A?Brand";v="24"`, 'Sec-CH-UA-Mobile': '?0', 'Sec-CH-UA-Platform': '"macOS"' };
+    callback({ requestHeaders: headers });
+  });
+  compatibilityInstalled = true;
 }
 function boundsForView() { const [width, height] = win.getContentSize(); return { x: 0, y: CHROME_HEIGHT, width: Math.max(0, width - (panelOpen ? PANEL_WIDTH : 0)), height: Math.max(0, height - CHROME_HEIGHT) }; }
 function layout() { const tab = activeTab(); if (tab?.view && tab.attached) tab.view.setBounds(boundsForView()); }
@@ -69,6 +85,7 @@ function newView(tab) {
   const update = () => { if (wc.isDestroyed()) return; tab.url = wc.getURL() || tab.url; tab.title = wc.getTitle() || tab.title; schedulePersist(); emitState(); };
   wc.on('did-navigate', (_, url) => { update(); recordHistory(tab, url); applyCleanWeb(tab); }); wc.on('did-navigate-in-page', update); wc.on('page-title-updated', update);
   wc.on('dom-ready', () => applyCleanWeb(tab));
+  wc.on('did-finish-load', () => { if (/magicbricks\.com$/i.test(new URL(wc.getURL()).hostname) && /access denied/i.test(wc.getTitle())) send('site:compatibility', { site: 'MagicBricks', url: wc.getURL(), message: 'MagicBricks blocks Electron browsers at its Akamai edge. Open this page in Chrome to continue.' }); });
   wc.on('did-start-loading', () => { tab.loading = true; emitState(); });
   wc.on('did-stop-loading', () => { tab.loading = false; emitState(); });
   wc.on('page-favicon-updated', (_, icons) => { tab.favicon = icons[0] || ''; emitState(); }); wc.on('render-process-gone', () => { if (tab.view === view) { if (tab.attached && win && !win.isDestroyed()) win.contentView.removeChildView(view); tab.view = null; tab.attached = false; } emitState(); }); return view;
@@ -107,10 +124,11 @@ function warmRestoredTabs() {
 async function createBrowser() {
   const restored = safeReadState(); settings = { ...settings, ...(restored.settings || {}) }; bookmarks = restored.bookmarks || []; history = restored.history || []; downloads = restored.downloads || []; savedSessions = restored.savedSessions || [];
   ses = session.fromPartition(PROFILE, { cache: true });
+  installSiteCompatibility();
   installBlocking();
   ses.on('will-download', (_, item) => { const entry = { id: crypto.randomUUID(), filename: item.getFilename(), url: item.getURL(), path: '', state: 'progressing', received: 0, total: item.getTotalBytes(), startedAt: Date.now() }; downloads.unshift(entry); send('downloads:changed', downloads); schedulePersist(); item.on('updated', (_event, state) => { entry.state = state; entry.received = item.getReceivedBytes(); send('downloads:changed', downloads); }); item.once('done', (_event, state) => { entry.state = state; entry.path = item.getSavePath(); entry.received = item.getReceivedBytes(); send('downloads:changed', downloads); schedulePersist(); }); });
   win = new BrowserWindow({ width: 1440, height: 920, minWidth: 940, minHeight: 640, backgroundColor: '#090d15', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 18 }, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
-  await win.loadFile(path.join(__dirname, 'ui', 'index.html')); win.on('resize', layout); win.on('close', persist);
+  await win.loadFile(path.join(__dirname, 'ui', 'index.html')); win.on('resize', layout); win.on('close', persist); win.on('closed', () => { tabs.forEach(destroyView); tabs = []; activeId = null; panelOpen = false; win = null; });
   const restoredTabs = (restored.tabs || []).slice(0, 24); tabs = restoredTabs.length ? restoredTabs.map((tab) => ({ ...tab, view: null, attached: false })) : [];
   if (!tabs.length) await createTab(); else await activateTab(tabs.some(t => t.id === restored.activeId) ? restored.activeId : tabs[0].id);
   suspensionTimer = setInterval(suspendInactive, 30_000); emitState(true); warmRestoredTabs();
@@ -126,6 +144,7 @@ ipcMain.handle('browser:home', () => showNewTab(activeTab()));
 ipcMain.handle('settings:set', (_, patch) => { settings = { ...settings, ...patch }; applyCleanWeb(); emitState(); schedulePersist(); return settings; });
 ipcMain.handle('panel:set-open', (_, open) => { panelOpen = Boolean(open); layout(); });
 ipcMain.handle('protection:get-details', () => blockedRequests.slice());
+ipcMain.handle('site:open-external', (_, target) => { try { const url = new URL(target); if (url.protocol === 'https:' && /(^|\.)magicbricks\.com$/i.test(url.hostname)) return shell.openExternal(url.toString()); } catch {} return false; });
 ipcMain.handle('library:get', () => ({ history, bookmarks, downloads, savedSessions })); ipcMain.handle('history:clear', () => { history = []; schedulePersist(); return history; });
 ipcMain.handle('bookmark:toggle', () => { const tab = activeTab(); if (!tab || tab.url === HOME) return bookmarks; const index = bookmarks.findIndex((b) => b.url === tab.url); if (index >= 0) bookmarks.splice(index, 1); else bookmarks.unshift({ id: crypto.randomUUID(), url: tab.url, title: tab.title, createdAt: Date.now() }); emitState(); schedulePersist(); return bookmarks; });
 ipcMain.handle('session:save', (_, name) => { savedSessions.unshift({ id: crypto.randomUUID(), name: name || `Session ${savedSessions.length + 1}`, createdAt: Date.now(), tabs: tabs.map(({ url, title }) => ({ url, title })) }); schedulePersist(); return savedSessions; });

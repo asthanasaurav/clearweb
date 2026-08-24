@@ -5,6 +5,7 @@ function buildCleanWebScript(enabled) {
   return `(() => {
     const STYLE_ID = 'clearweb-clean-style';
     const OBSERVER_KEY = '__clearwebCleanObserver';
+    const YOUTUBE_TIMER_KEY = '__clearwebYouTubeAdTimer';
     const adHosts = ${JSON.stringify(AD_HOST_MARKERS)};
     const adLabel = new RegExp(${JSON.stringify(AD_LABEL_PATTERN)}, 'i');
     const protectedSelector = 'form,nav,[role="navigation"],[role="dialog"],[aria-modal="true"],[data-clearweb-keep]';
@@ -12,7 +13,9 @@ function buildCleanWebScript(enabled) {
       '[data-ad]', '[data-ad-slot]', '[data-ad-container]', '[aria-label*="advertisement" i]',
       '[class~="ad-slot" i]', '[class~="ad-container" i]', '[class*="advertisement" i]',
       '[id^="google_ads"]', '[id^="div-gpt-ad"]', '[class*="newsletter" i]',
-      '[class*="social-share" i]', '[class*="cookie-banner" i]'
+      '[class*="social-share" i]', '[class*="cookie-banner" i]',
+      'ytd-ad-slot-renderer', 'ytd-display-ad-renderer', 'ytd-promoted-sparkles-web-renderer',
+      'ytd-in-feed-ad-layout-renderer', '.ytp-ad-player-overlay', '.ytp-ad-overlay-container'
     ].join(',');
 
     const existing = document.getElementById(STYLE_ID);
@@ -20,6 +23,8 @@ function buildCleanWebScript(enabled) {
       existing?.remove();
       window[OBSERVER_KEY]?.disconnect();
       delete window[OBSERVER_KEY];
+      clearInterval(window[YOUTUBE_TIMER_KEY]);
+      delete window[YOUTUBE_TIMER_KEY];
       return { removed: 0 };
     }
 
@@ -86,6 +91,15 @@ function buildCleanWebScript(enabled) {
       schedule();
     });
     window[OBSERVER_KEY].observe(document.documentElement, { childList: true, subtree: true });
+    if (/(^|\.)youtube\.com$/.test(location.hostname) && !window[YOUTUBE_TIMER_KEY]) {
+      const handlePlayerAd = () => {
+        const player = document.querySelector('.html5-video-player.ad-showing'); if (!player) return;
+        const skip = player.querySelector('.ytp-ad-skip-button-modern,.ytp-ad-skip-button'); if (skip) { skip.click(); return; }
+        const video = player.querySelector('video'); if (video && Number.isFinite(video.duration) && video.duration > 0) { video.muted = true; video.currentTime = Math.max(0, video.duration - 0.05); }
+      };
+      window[YOUTUBE_TIMER_KEY] = setInterval(handlePlayerAd, 400);
+      handlePlayerAd();
+    }
     return { removed };
   })()`;
 }

@@ -23,3 +23,10 @@ test('injected cleaner observes dynamic slots and protects controls', () => {
   assert.doesNotMatch(script, /innerText/);
   assert.doesNotMatch(script, /getBoundingClientRect/);
 });
+
+test('adds YouTube-specific ad slots and player ad handling', () => {
+  const script = buildCleanWebScript(true);
+  assert.match(script, /ytd-ad-slot-renderer/);
+  assert.match(script, /html5-video-player\.ad-showing/);
+  assert.match(script, /ytp-ad-skip-button/);
+});
