@@ -6,11 +6,13 @@ const { ElectronBlocker } = require('@ghostery/adblocker-electron');
 const { sanitizeUrl, normalizeInput } = require('../../packages/privacy/url-hygiene');
 const { OllamaProvider } = require('../../packages/ai/providers/ollama');
 const { buildCleanWebScript } = require('../../packages/clean-web/inject');
+const { getWeatherContext } = require('../../packages/ai/tools/weather');
 
 const PROFILE = 'persist:clearweb-default';
 const HOME = 'clearweb://newtab';
 const CHROME_HEIGHT = 112;
-const SUSPEND_AFTER_MS = Number(process.env.CLEARWEB_SUSPEND_MS || 60_000);
+const SUSPEND_AFTER_MS = Number(process.env.CLEARWEB_SUSPEND_MS || 15 * 60_000);
+const MAX_LIVE_TABS = Number(process.env.CLEARWEB_MAX_LIVE_TABS || 8);
 const PANEL_WIDTH = 414;
 let win, ses, blocker, saveTimer, suspensionTimer, protectionEmitTimer;
 let panelOpen = false;
@@ -26,7 +28,7 @@ const persist = () => {
   try { fs.mkdirSync(path.dirname(dataFile()), { recursive: true }); fs.writeFileSync(dataFile(), JSON.stringify(state, null, 2)); } catch (error) { console.error('[Clearweb] state save failed:', error); }
 };
 const schedulePersist = () => { clearTimeout(saveTimer); saveTimer = setTimeout(persist, 250); };
-const publicTab = (tab) => ({ id: tab.id, url: tab.url, title: tab.title, favicon: tab.favicon, suspended: !tab.view, active: tab.id === activeId });
+const publicTab = (tab) => ({ id: tab.id, url: tab.url, title: tab.title, favicon: tab.favicon, suspended: !tab.view, loading: Boolean(tab.loading), active: tab.id === activeId });
 const send = (channel, value) => { if (win && !win.isDestroyed()) win.webContents.send(channel, value); };
 const activeTab = () => tabs.find((tab) => tab.id === activeId);
 const activeWebContents = () => {
@@ -51,13 +53,15 @@ async function installBlocking() {
 function boundsForView() { const [width, height] = win.getContentSize(); return { x: 0, y: CHROME_HEIGHT, width: Math.max(0, width - (panelOpen ? PANEL_WIDTH : 0)), height: Math.max(0, height - CHROME_HEIGHT) }; }
 function layout() { const tab = activeTab(); if (tab?.view) tab.view.setBounds(boundsForView()); }
 function newView(tab) {
-  const view = new BrowserView({ webPreferences: { partition: PROFILE, contextIsolation: true, nodeIntegration: false, sandbox: true, safeDialogs: true } }); tab.view = view; view.setAutoResize({ width: true, height: true });
+  const view = new BrowserView({ webPreferences: { partition: PROFILE, contextIsolation: true, nodeIntegration: false, sandbox: true, safeDialogs: true, backgroundThrottling: true } }); tab.view = view;
   const wc = view.webContents;
   wc.setWindowOpenHandler(({ url }) => { createTab(url, true); return { action: 'deny' }; });
   wc.on('will-navigate', (event, url) => { const cleaned = cleanTarget(url); if (cleaned !== url) { event.preventDefault(); wc.loadURL(cleaned).catch(() => {}); emitState(); } });
   const update = () => { if (wc.isDestroyed()) return; tab.url = wc.getURL() || tab.url; tab.title = wc.getTitle() || tab.title; schedulePersist(); emitState(); };
   wc.on('did-navigate', (_, url) => { update(); recordHistory(tab, url); applyCleanWeb(tab); }); wc.on('did-navigate-in-page', update); wc.on('page-title-updated', update);
   wc.on('dom-ready', () => applyCleanWeb(tab));
+  wc.on('did-start-loading', () => { tab.loading = true; emitState(); });
+  wc.on('did-stop-loading', () => { tab.loading = false; emitState(); });
   wc.on('page-favicon-updated', (_, icons) => { tab.favicon = icons[0] || ''; emitState(); }); wc.on('render-process-gone', () => { tab.view = null; emitState(); }); return view;
 }
 function recordHistory(tab, url) { if (!/^https?:/i.test(url)) return; history.unshift({ id: crypto.randomUUID(), url, title: tab.title || url, visitedAt: Date.now() }); schedulePersist(); }
@@ -65,11 +69,25 @@ async function loadTab(tab, url = tab.url) { if (url === HOME || !url) return; t
 function showNewTab(tab) { if (!tab) return; tab.url = HOME; tab.title = 'New Tab'; if (tab.view && !tab.view.webContents.isDestroyed()) tab.view.webContents.destroy(); tab.view = null; if (win.getBrowserView()) win.setBrowserView(null); emitState(); schedulePersist(); }
 async function activateTab(id) {
   const previous = activeTab(); if (previous) previous.lastActive = Date.now(); const tab = tabs.find((item) => item.id === id); if (!tab) return;
-  activeId = id; tab.lastActive = Date.now(); if (tab.url === HOME) showNewTab(tab); else { if (!tab.view) { newView(tab); await loadTab(tab); } win.setBrowserView(tab.view); layout(); tab.view.webContents.focus(); emitState(); } schedulePersist();
+  activeId = id; tab.lastActive = Date.now(); if (tab.url === HOME) showNewTab(tab); else {
+    const needsRestore = !tab.view;
+    if (needsRestore) newView(tab);
+    win.setBrowserView(tab.view); layout(); emitState(); tab.view.webContents.focus();
+    if (needsRestore) loadTab(tab);
+  } schedulePersist();
 }
 async function createTab(url = HOME, activate = true) { const tab = { id: crypto.randomUUID(), url: url || HOME, title: 'New Tab', favicon: '', view: null, lastActive: Date.now() }; tabs.push(tab); if (activate) await activateTab(tab.id); else emitState(); return publicTab(tab); }
 function closeTab(id) { const index = tabs.findIndex((tab) => tab.id === id); if (index < 0) return; const [tab] = tabs.splice(index, 1); if (tab.view && !tab.view.webContents.isDestroyed()) tab.view.webContents.destroy(); if (!tabs.length) return createTab(); if (activeId === id) activateTab(tabs[Math.min(index, tabs.length - 1)].id); else emitState(); schedulePersist(); }
-function suspendInactive() { const now = Date.now(); for (const tab of tabs) { if (tab.id === activeId || !tab.view || now - tab.lastActive < SUSPEND_AFTER_MS) continue; tab.url = tab.view.webContents.getURL() || tab.url; tab.title = tab.view.webContents.getTitle() || tab.title; tab.view.webContents.destroy(); tab.view = null; } emitState(); schedulePersist(); }
+function suspendInactive() {
+  const now = Date.now();
+  const liveInactive = tabs.filter((tab) => tab.id !== activeId && tab.view).sort((a, b) => b.lastActive - a.lastActive);
+  liveInactive.forEach((tab, index) => {
+    if (index < MAX_LIVE_TABS - 1 && now - tab.lastActive < SUSPEND_AFTER_MS) return;
+    tab.url = tab.view.webContents.getURL() || tab.url; tab.title = tab.view.webContents.getTitle() || tab.title;
+    tab.view.webContents.destroy(); tab.view = null; tab.loading = false;
+  });
+  emitState(); schedulePersist();
+}
 function applyCleanWeb(tab = activeTab()) { if (!tab?.view || tab.view.webContents.isDestroyed()) return; tab.view.webContents.executeJavaScript(buildCleanWebScript(settings.cleanWeb), true).catch(() => {}); }
 
 async function createBrowser() {
@@ -97,6 +115,15 @@ ipcMain.handle('library:get', () => ({ history, bookmarks, downloads, savedSessi
 ipcMain.handle('bookmark:toggle', () => { const tab = activeTab(); if (!tab || tab.url === HOME) return bookmarks; const index = bookmarks.findIndex((b) => b.url === tab.url); if (index >= 0) bookmarks.splice(index, 1); else bookmarks.unshift({ id: crypto.randomUUID(), url: tab.url, title: tab.title, createdAt: Date.now() }); emitState(); schedulePersist(); return bookmarks; });
 ipcMain.handle('session:save', (_, name) => { savedSessions.unshift({ id: crypto.randomUUID(), name: name || `Session ${savedSessions.length + 1}`, createdAt: Date.now(), tabs: tabs.map(({ url, title }) => ({ url, title })) }); schedulePersist(); return savedSessions; });
 ipcMain.handle('session:restore', async (_, id) => { const snapshot = savedSessions.find(s => s.id === id); if (!snapshot) return; const added = []; for (const item of snapshot.tabs) added.push(await createTab(item.url, false)); if (added.length) await activateTab(added[0].id); }); ipcMain.handle('download:open', (_, filePath) => filePath && shell.openPath(filePath));
-ipcMain.handle('ai:ask', async (_, { prompt, pageText }) => { if (!settings.aiEnabled) return { ok: false, error: 'AI Assistant is disabled.' }; try { return { ok: true, text: await ai.ask({ prompt, context: String(pageText || '').slice(0, 18_000) }) }; } catch (error) { return { ok: false, error: error.message, hint: 'Start Ollama and install the configured Qwen model. Browsing remains fully functional.' }; } });
+ipcMain.handle('ai:ask', async (_, { prompt, pageText }) => {
+  if (!settings.aiEnabled) return { ok: false, error: 'AI Assistant is disabled.' };
+  try {
+    const weather = pageText ? { matched: false } : await getWeatherContext(prompt);
+    if (weather.needsLocation) return { ok: true, text: 'Which city should I check? For example: “weather in Amsterdam”.' };
+    if (weather.error) return { ok: true, text: weather.error };
+    const context = weather.context || String(pageText || '').slice(0, 18_000);
+    return { ok: true, text: await ai.ask({ prompt, context }) };
+  } catch (error) { return { ok: false, error: error.message, hint: 'Browsing remains fully functional. For local AI errors, verify Ollama and the configured Qwen model.' }; }
+});
 ipcMain.handle('page:extract', async () => { const tab = activeTab(); if (!tab?.view) return ''; try { return await tab.view.webContents.executeJavaScript(`document.body?.innerText?.slice(0,18000)||''`, true); } catch { return ''; } });
 app.whenReady().then(createBrowser); app.on('before-quit', () => { clearInterval(suspensionTimer); persist(); }); app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); }); app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createBrowser(); });

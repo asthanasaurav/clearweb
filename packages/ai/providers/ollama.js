@@ -5,7 +5,7 @@ class OllamaProvider {
     const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 90_000);
     try {
       const response = await fetch(`${this.endpoint}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, signal: controller.signal, body: JSON.stringify({ model: this.model, stream: false, messages: [
-        { role: 'system', content: 'You are Clearweb, a concise local browser assistant. Use only the supplied page context when asked about the current page. Say when context is insufficient.' },
+        { role: 'system', content: 'You are Clearweb, a concise and capable general-purpose local assistant. Answer general questions directly. When PAGE CONTEXT is supplied and the user asks about the current page, ground the answer only in that context and say when it is insufficient. Never pretend to have live data such as current weather unless it is present in supplied context.' },
         { role: 'user', content: `${context ? `PAGE CONTEXT:\n${context}\n\n` : ''}${prompt}` }
       ] }) });
       if (!response.ok) throw new Error(`Local Qwen returned ${response.status}`); const body = await response.json(); return body.message?.content || 'No response from local Qwen.';
