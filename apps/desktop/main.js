@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { ElectronBlocker } = require('@ghostery/adblocker-electron');
 const { sanitizeUrl, normalizeInput } = require('../../packages/privacy/url-hygiene');
 const { OllamaProvider } = require('../../packages/ai/providers/ollama');
+const { buildCleanWebScript } = require('../../packages/clean-web/inject');
 
 const PROFILE = 'persist:clearweb-default';
 const HOME = 'clearweb://newtab';
@@ -56,6 +57,7 @@ function newView(tab) {
   wc.on('will-navigate', (event, url) => { const cleaned = cleanTarget(url); if (cleaned !== url) { event.preventDefault(); wc.loadURL(cleaned).catch(() => {}); emitState(); } });
   const update = () => { if (wc.isDestroyed()) return; tab.url = wc.getURL() || tab.url; tab.title = wc.getTitle() || tab.title; schedulePersist(); emitState(); };
   wc.on('did-navigate', (_, url) => { update(); recordHistory(tab, url); applyCleanWeb(tab); }); wc.on('did-navigate-in-page', update); wc.on('page-title-updated', update);
+  wc.on('dom-ready', () => applyCleanWeb(tab));
   wc.on('page-favicon-updated', (_, icons) => { tab.favicon = icons[0] || ''; emitState(); }); wc.on('render-process-gone', () => { tab.view = null; emitState(); }); return view;
 }
 function recordHistory(tab, url) { if (!/^https?:/i.test(url)) return; history.unshift({ id: crypto.randomUUID(), url, title: tab.title || url, visitedAt: Date.now() }); schedulePersist(); }
@@ -68,8 +70,7 @@ async function activateTab(id) {
 async function createTab(url = HOME, activate = true) { const tab = { id: crypto.randomUUID(), url: url || HOME, title: 'New Tab', favicon: '', view: null, lastActive: Date.now() }; tabs.push(tab); if (activate) await activateTab(tab.id); else emitState(); return publicTab(tab); }
 function closeTab(id) { const index = tabs.findIndex((tab) => tab.id === id); if (index < 0) return; const [tab] = tabs.splice(index, 1); if (tab.view && !tab.view.webContents.isDestroyed()) tab.view.webContents.destroy(); if (!tabs.length) return createTab(); if (activeId === id) activateTab(tabs[Math.min(index, tabs.length - 1)].id); else emitState(); schedulePersist(); }
 function suspendInactive() { const now = Date.now(); for (const tab of tabs) { if (tab.id === activeId || !tab.view || now - tab.lastActive < SUSPEND_AFTER_MS) continue; tab.url = tab.view.webContents.getURL() || tab.url; tab.title = tab.view.webContents.getTitle() || tab.title; tab.view.webContents.destroy(); tab.view = null; } emitState(); schedulePersist(); }
-function cleanWebScript(enabled) { return `(() => { document.documentElement.classList.toggle('clearweb-clean', ${Boolean(enabled)}); let style=document.getElementById('clearweb-clean-style'); if(!style){style=document.createElement('style');style.id='clearweb-clean-style';document.documentElement.appendChild(style)} style.textContent=${Boolean(enabled)} ? \`[class*="newsletter" i],[class*="subscribe" i],[class*="social-share" i],[aria-label*="advertisement" i],[data-ad],[id^="google_ads"],[class*="cookie-banner" i]{display:none!important} video[autoplay]{visibility:hidden!important}\` : ''; if(${Boolean(enabled)})document.querySelectorAll('video[autoplay]').forEach(v=>{try{v.pause()}catch{}}); return true })()`; }
-function applyCleanWeb(tab = activeTab()) { if (!tab?.view || tab.view.webContents.isDestroyed()) return; tab.view.webContents.executeJavaScript(cleanWebScript(settings.cleanWeb), true).catch(() => {}); }
+function applyCleanWeb(tab = activeTab()) { if (!tab?.view || tab.view.webContents.isDestroyed()) return; tab.view.webContents.executeJavaScript(buildCleanWebScript(settings.cleanWeb), true).catch(() => {}); }
 
 async function createBrowser() {
   const restored = safeReadState(); settings = { ...settings, ...(restored.settings || {}) }; bookmarks = restored.bookmarks || []; history = restored.history || []; downloads = restored.downloads || []; savedSessions = restored.savedSessions || [];
