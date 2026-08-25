@@ -88,6 +88,7 @@ The feature branch contains a runnable Electron-only macOS MVP with:
 - Protection counters and an in-browser privacy dashboard
 - Five-minute inactive-tab destruction with transparent restore from saved URL/title state
 - A default-on local AI sidebar backed by a provider abstraction; Qwen through Ollama is the default provider
+- An opt-in, privacy-safe request-metadata capture path plus reproducible MLX-LM dataset, QLoRA training, and evaluation tooling
 - Sandboxed, context-isolated web content and a narrow IPC bridge for trusted browser chrome
 
 ### Run
@@ -106,6 +107,8 @@ Local AI is optional at runtime. Install Ollama and pull `qwen2.5:3b` to enable 
 ```sh
 pnpm run check
 pnpm test
+pnpm model:data
+pnpm model:validate
 CSC_IDENTITY_AUTO_DISCOVERY=false pnpm run build:mac
 ```
 
@@ -118,6 +121,7 @@ Unsigned arm64 DMG/ZIP artifacts are produced in `dist/`. Public distribution st
 - Protection counters are per app run; browsing library and sessions persist.
 - Clean Web currently uses conservative deterministic DOM rules, not an always-on AI classifier.
 - Qwen is not bundled, so the user must run Ollama and install the model locally.
+- Local model-training capture is off by default and stores only sanitized hostnames and categorical request metadata.
 - Builds are macOS arm64 and unsigned; Fedora and Windows are intentionally out of scope.
 
 ## License

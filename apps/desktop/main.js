@@ -7,6 +7,7 @@ const { sanitizeUrl, normalizeInput } = require('../../packages/privacy/url-hygi
 const { OllamaProvider } = require('../../packages/ai/providers/ollama');
 const { buildCleanWebScript } = require('../../packages/clean-web/inject');
 const { getWeatherContext } = require('../../packages/ai/tools/weather');
+const { LocalCaptureStore } = require('../../packages/training/capture-store');
 
 const PROFILE = 'persist:clearweb-default';
 const CHROME_VERSION = process.env.CLEARWEB_COMPAT_CHROME_VERSION || '151.0.0.0';
@@ -18,11 +19,11 @@ const CHROME_HEIGHT = 112;
 const SUSPEND_AFTER_MS = Number(process.env.CLEARWEB_SUSPEND_MS || 15 * 60_000);
 const MAX_LIVE_TABS = Number(process.env.CLEARWEB_MAX_LIVE_TABS || 8);
 const PANEL_WIDTH = 414;
-let win, ses, blocker, saveTimer, suspensionTimer, protectionEmitTimer, lastStateJson;
+let win, ses, blocker, saveTimer, suspensionTimer, protectionEmitTimer, lastStateJson, captureStore;
 let blockingInstalled = false, compatibilityInstalled = false;
 let panelOpen = false;
 let tabs = [], activeId = null, downloads = [], history = [], bookmarks = [], savedSessions = [];
-let settings = { aiEnabled: true, cleanWeb: true };
+let settings = { aiEnabled: true, cleanWeb: true, trainingCapture: false };
 const protection = { blocked: 0, trackingParamsRemoved: 0 };
 const blockedRequests = [];
 const ai = new OllamaProvider({ model: process.env.CLEARWEB_QWEN_MODEL || 'qwen2.5:3b' });
@@ -60,8 +61,15 @@ const cleanTarget = (input) => { const clean = sanitizeUrl(normalizeInput(input)
 async function installBlocking() {
   if (blockingInstalled) return;
   blockingInstalled = true;
-  try { blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch); blocker.updateFromDiff({ added: ['||youtube.com/api/stats/ads$xhr', '||youtube.com/pagead/$xhr', '||youtube.com/ptracking$xhr', '||google.com/pagead/$xhr', '||doubleclick.net^', '||googlesyndication.com^'] }); blocker.enableBlockingInSession(ses); blocker.on('request-blocked', (request) => { protection.blocked += 1; blockedRequests.unshift({ url: request?.url || '', host: request?.hostname || '', source: request?.sourceHostname || '', type: request?.type || 'other', blockedAt: Date.now() }); if (blockedRequests.length > 500) blockedRequests.length = 500; scheduleProtectionEmit(); }); }
+  try { blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch); blocker.updateFromDiff({ added: ['||youtube.com/api/stats/ads$xhr', '||youtube.com/pagead/$xhr', '||youtube.com/ptracking$xhr', '||google.com/pagead/$xhr', '||doubleclick.net^', '||googlesyndication.com^'] }); blocker.enableBlockingInSession(ses); blocker.on('request-blocked', (request) => { protection.blocked += 1; blockedRequests.unshift({ url: request?.url || '', host: request?.hostname || '', source: request?.sourceHostname || '', type: request?.type || 'other', blockedAt: Date.now() }); if (blockedRequests.length > 500) blockedRequests.length = 500; captureStore?.record(request, { pageDomain: request?.sourceHostname, outcome: 'observed_blocked', source: 'ghostery', listMatches: ['ghostery'] }); scheduleProtectionEmit(); }); }
   catch (error) { blockingInstalled = false; console.error('[Clearweb] blocker unavailable; continuing unblocked:', error); }
+}
+function installTrainingCapture() {
+  captureStore = new LocalCaptureStore({ filePath: path.join(app.getPath('userData'), 'model-data', 'captured.jsonl'), isEnabled: () => settings.trainingCapture });
+  ses.webRequest.onCompleted({ urls: ['http://*/*', 'https://*/*'] }, (details) => {
+    const tab = tabs.find((item) => item.view?.webContents?.id === details.webContentsId);
+    captureStore.record(details, { pageUrl: tab?.url, outcome: 'observed_allowed', source: 'browser', userContext: details.resourceType === 'mainFrame' ? 'user_navigation' : 'automatic_page_load' });
+  });
 }
 function installSiteCompatibility() {
   if (compatibilityInstalled) return;
@@ -125,6 +133,7 @@ async function createBrowser() {
   const restored = safeReadState(); settings = { ...settings, ...(restored.settings || {}) }; bookmarks = restored.bookmarks || []; history = restored.history || []; downloads = restored.downloads || []; savedSessions = restored.savedSessions || [];
   ses = session.fromPartition(PROFILE, { cache: true });
   installSiteCompatibility();
+  installTrainingCapture();
   installBlocking();
   ses.on('will-download', (_, item) => { const entry = { id: crypto.randomUUID(), filename: item.getFilename(), url: item.getURL(), path: '', state: 'progressing', received: 0, total: item.getTotalBytes(), startedAt: Date.now() }; downloads.unshift(entry); send('downloads:changed', downloads); schedulePersist(); item.on('updated', (_event, state) => { entry.state = state; entry.received = item.getReceivedBytes(); send('downloads:changed', downloads); }); item.once('done', (_event, state) => { entry.state = state; entry.path = item.getSavePath(); entry.received = item.getReceivedBytes(); send('downloads:changed', downloads); schedulePersist(); }); });
   win = new BrowserWindow({ width: 1440, height: 920, minWidth: 940, minHeight: 640, backgroundColor: '#090d15', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 18 }, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
@@ -144,6 +153,7 @@ ipcMain.handle('browser:home', () => showNewTab(activeTab()));
 ipcMain.handle('settings:set', (_, patch) => { settings = { ...settings, ...patch }; applyCleanWeb(); emitState(); schedulePersist(); return settings; });
 ipcMain.handle('panel:set-open', (_, open) => { panelOpen = Boolean(open); layout(); });
 ipcMain.handle('protection:get-details', () => blockedRequests.slice());
+ipcMain.handle('training:get-stats', () => captureStore?.stats() || { enabled: false, sessionCaptured: 0, sessionRejected: 0, bytes: 0 });
 ipcMain.handle('site:open-external', (_, target) => { try { const url = new URL(target); if (url.protocol === 'https:' && /(^|\.)magicbricks\.com$/i.test(url.hostname)) return shell.openExternal(url.toString()); } catch {} return false; });
 ipcMain.handle('library:get', () => ({ history, bookmarks, downloads, savedSessions })); ipcMain.handle('history:clear', () => { history = []; schedulePersist(); return history; });
 ipcMain.handle('bookmark:toggle', () => { const tab = activeTab(); if (!tab || tab.url === HOME) return bookmarks; const index = bookmarks.findIndex((b) => b.url === tab.url); if (index >= 0) bookmarks.splice(index, 1); else bookmarks.unshift({ id: crypto.randomUUID(), url: tab.url, title: tab.title, createdAt: Date.now() }); emitState(); schedulePersist(); return bookmarks; });
