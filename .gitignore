@@ -8,3 +8,7 @@ coverage/
 .env.*
 !.env.example
 *.log
+model-data/adapters/
+model-data/local-captures/
+model-data/human-reviewed.jsonl
+model-data/generated/evaluation-report.json

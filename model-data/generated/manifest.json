@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "policy_version": "clearweb-request-policy-v1",
+  "counts": {
+    "input": 448,
+    "train": 308,
+    "valid": 56,
+    "test": 84,
+    "review": 0
+  },
+  "action_counts": {
+    "train": {
+      "allow": 176,
+      "block": 88,
+      "review": 44
+    },
+    "valid": {
+      "allow": 32,
+      "block": 16,
+      "review": 8
+    },
+    "test": {
+      "allow": 48,
+      "block": 24,
+      "review": 12
+    }
+  },
+  "split_strategy": "stable SHA-256 assignment by registrable page domain; 70/15/15 targets",
+  "privacy": "Hostnames and categorical request metadata only; paths, queries, headers, cookies, and bodies are excluded."
+}

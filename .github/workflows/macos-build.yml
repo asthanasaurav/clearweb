@@ -1,0 +1,36 @@
+name: macOS Build
+on:
+  push:
+    branches: [main, feat/mvp-browser]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Syntax checks
+        run: |
+          node --check apps/desktop/main.js
+          node --check apps/desktop/preload.js
+          node --check apps/desktop/ui/renderer.js
+          node --check packages/ai/classifier.js
+          node --check packages/privacy/url-hygiene.js
+          node --check scripts/model/build-dataset.js
+          node --check scripts/model/validate-dataset.js
+          node --check scripts/model/evaluate-model.js
+          node --check scripts/model/review-cases.js
+      - run: pnpm model:data
+      - run: pnpm model:validate
+      - run: pnpm test
+      - name: Verify Electron installation
+        run: pnpm exec electron --version
